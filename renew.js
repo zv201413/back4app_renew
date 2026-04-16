@@ -107,7 +107,7 @@ async function retry(page, fn, name, maxRetries = 3) {
 
     console.log('🖱️ 点击 Web Deployment 选项卡');
     await retry(page, async () => {
-      const webDeploymentTab = page.locator('text=Web Deployment').first();
+      const webDeploymentTab = page.locator('a:has-text("Web Deployment"), button:has-text("Web Deployment")').filter({ visible: true }).first();
       await webDeploymentTab.waitFor({ state: 'visible', timeout: 30000 });
       await webDeploymentTab.click();
     }, '点击 Web Deployment');
