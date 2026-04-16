@@ -7,6 +7,7 @@ const ACC_PWD = process.env.ACC_PWD || process.env.PWD;
 const TG_TOKEN = process.env.TG_TOKEN;
 const TG_ID = process.env.TG_ID;
 const PROXY_URL = process.env.PROXY_URL;
+const APP_NAME = process.env.APP_NAME || 'b4app';
 
 const LOGIN_URL = 'https://www.back4app.com/login';
 
@@ -104,12 +105,21 @@ async function retry(page, fn, name, maxRetries = 3) {
     console.log('⏳ 等待 5 秒...');
     await page.waitForTimeout(5000);
 
-    console.log('🖱️ 选择应用 "b4app"');
+    console.log('🖱️ 点击 Web Deployment 选项卡');
     await retry(page, async () => {
-      const appLink = page.locator('text=b4app').first();
+      const webDeploymentTab = page.locator('text=Web Deployment').first();
+      await webDeploymentTab.waitFor({ state: 'visible', timeout: 30000 });
+      await webDeploymentTab.click();
+    }, '点击 Web Deployment');
+    await page.screenshot({ path: 'step3.5_web_deployment.png' });
+    addToSummary('Step 3.5: 切换到 Web Deployment', 'step3.5_web_deployment.png');
+
+    console.log(`🖱️ 选择应用 "${APP_NAME}"`);
+    await retry(page, async () => {
+      const appLink = page.locator(`text=${APP_NAME}`).first();
       await appLink.waitFor({ state: 'visible', timeout: 30000 });
       await appLink.click();
-    }, '选择应用 b4app');
+    }, `选择应用 ${APP_NAME}`);
 
     console.log('⏳ 等待应用详情页加载...');
     await page.waitForLoadState('load');
