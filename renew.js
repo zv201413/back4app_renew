@@ -70,6 +70,14 @@ function addToSummary(title, imagePath) {
     await page.screenshot({ path: 'step1_landing.png' });
     addToSummary('Step 1: 访问首页', 'step1_landing.png');
 
+    console.log('🔘 检查弹窗');
+    const understandBtn = page.locator('button:has-text("I understand"), button:has-text("I Understand")').first();
+    if (await understandBtn.isVisible().catch(() => false)) {
+        console.log('🔘 点击"我明白"');
+        await understandBtn.click();
+        await page.waitForTimeout(1000);
+    }
+
     console.log('🖱️ 点击右上角 Log in');
     await page.locator('a:has-text("Log in"), a:has-text("Login")').first().click();
     await page.waitForURL('**/login**', { timeout: 30000 });
