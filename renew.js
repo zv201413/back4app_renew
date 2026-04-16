@@ -116,7 +116,12 @@ async function retry(page, fn, name, maxRetries = 3) {
 
     console.log(`🖱️ 选择应用 "${APP_NAME}"`);
     await retry(page, async () => {
-      const appLink = page.locator(`text=${APP_NAME}`).first();
+      const loading = page.locator('text=Loading...');
+      if (await loading.isVisible()) {
+          console.log('⏳ 正在加载列表，等待中...');
+          await loading.waitFor({ state: 'hidden', timeout: 30000 });
+      }
+      const appLink = page.locator(`a:has-text("${APP_NAME}"), div:has-text("${APP_NAME}")`).filter({ visible: true }).first();
       await appLink.waitFor({ state: 'visible', timeout: 30000 });
       await appLink.click();
     }, `选择应用 ${APP_NAME}`);
