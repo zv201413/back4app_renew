@@ -81,7 +81,8 @@ async function retry(page, fn, name, maxRetries = 3) {
 
   try {
     console.log('🌐 打开登录页');
-    await page.goto(LOGIN_URL, { waitUntil: 'networkidle', timeout: 60000 });
+    await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForSelector('input[name="email"]', { timeout: 30000 });
     await page.screenshot({ path: 'step1_login_page.png' });
     addToSummary('Step 1: 登录页', 'step1_login_page.png');
 
@@ -96,7 +97,7 @@ async function retry(page, fn, name, maxRetries = 3) {
     
     console.log('⏳ 等待控制台加载...');
     await page.waitForURL('**/dashboard**', { timeout: 60000 });
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('load');
     await page.screenshot({ path: 'step3_dashboard.png' });
     addToSummary('Step 3: 登录成功 - 控制台', 'step3_dashboard.png');
 
@@ -111,7 +112,7 @@ async function retry(page, fn, name, maxRetries = 3) {
     }, '选择应用 b4app');
 
     console.log('⏳ 等待应用详情页加载...');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('load');
     await page.screenshot({ path: 'step4_app_detail.png' });
     addToSummary('Step 4: 应用详情页', 'step4_app_detail.png');
 
