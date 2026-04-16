@@ -85,31 +85,20 @@ async function retry(page, fn, name, maxRetries = 3) {
     await page.screenshot({ path: 'step1_login_page.png' });
     addToSummary('Step 1: 登录页', 'step1_login_page.png');
 
-    console.log('🖱️ 点击 Continue with GitHub');
-    await retry(page, async () => {
-      await page.locator('button:has-text("Continue with GitHub")').click();
-      await page.waitForURL('**github.com/login**', { timeout: 30000 });
-    }, '点击 GitHub 登录');
-
-    console.log('⏳ 等待 GitHub 登录表单...');
-    await page.waitForSelector('input[name="login"], input[id="login_field"]', { timeout: 30000 });
-    await page.screenshot({ path: 'step2_github_login.png' });
-    addToSummary('Step 2: GitHub 登录', 'step2_github_login.png');
-
-    console.log('📧 填写 GitHub 账号密码');
-    await page.locator('input[name="login"], input[id="login_field"]').fill(ACC);
+    console.log('📧 填写邮箱密码');
+    await page.locator('input[name="email"], input[id="email"]').fill(ACC);
     await page.locator('input[name="password"], input[id="password"]').fill(ACC_PWD);
-    await page.screenshot({ path: 'step3_github_filled.png' });
-    addToSummary('Step 3: 填写信息', 'step3_github_filled.png');
+    await page.screenshot({ path: 'step2_filled.png' });
+    addToSummary('Step 2: 填写信息', 'step2_filled.png');
 
-    console.log('🖱️ 点击 Sign in');
-    await page.locator('input[type="submit"], button[type="submit"]').click();
+    console.log('🖱️ 点击 Continue');
+    await page.locator('button:has-text("Continue")').click();
     
-    console.log('⏳ 等待跳转回 Back4app...');
+    console.log('⏳ 等待控制台加载...');
     await page.waitForURL('**/dashboard**', { timeout: 60000 });
     await page.waitForLoadState('networkidle');
-    await page.screenshot({ path: 'step4_dashboard.png' });
-    addToSummary('Step 4: 登录成功 - 控制台', 'step4_dashboard.png');
+    await page.screenshot({ path: 'step3_dashboard.png' });
+    addToSummary('Step 3: 登录成功 - 控制台', 'step3_dashboard.png');
 
     console.log('⏳ 等待 5 秒...');
     await page.waitForTimeout(5000);
@@ -123,8 +112,8 @@ async function retry(page, fn, name, maxRetries = 3) {
 
     console.log('⏳ 等待应用详情页加载...');
     await page.waitForLoadState('networkidle');
-    await page.screenshot({ path: 'step5_app_detail.png' });
-    addToSummary('Step 5: 应用详情页', 'step5_app_detail.png');
+    await page.screenshot({ path: 'step4_app_detail.png' });
+    addToSummary('Step 4: 应用详情页', 'step4_app_detail.png');
 
     console.log('🚀 点击 "Redeploy App"');
     await retry(page, async () => {
@@ -135,11 +124,11 @@ async function retry(page, fn, name, maxRetries = 3) {
 
     console.log('⏳ 等待部署开始...');
     await page.waitForTimeout(3000); 
-    await page.screenshot({ path: 'step6_redeploying.png' });
-    addToSummary('Step 6: 开始重新部署', 'step6_redeploying.png');
+    await page.screenshot({ path: 'step5_redeploying.png' });
+    addToSummary('Step 5: 开始重新部署', 'step5_redeploying.png');
 
     console.log('✅ 操作完成');
-    await sendTG('✅', 'Back4app 重新部署成功', '已点击 Redeploy App', 'step6_redeploying.png');
+    await sendTG('✅', 'Back4app 重新部署成功', '已点击 Redeploy App', 'step5_redeploying.png');
 
   } catch (error) {
     console.log('❌ 流程失败: ' + error.message);
