@@ -9,12 +9,12 @@ const TG_ID = process.env.TG_ID;
 const PROXY_URL = process.env.PROXY_URL;
 const APP_NAME = process.env.APP_NAME || 'b4app';
 const T = parseInt(process.env.T || '12'); // 执行次数，默认12次
-const ACCOUNT_INDEX = parseInt(process.env.ACCOUNT_INDEX || '0'); // 账号索引，用于计算首次延迟
+const ACCOUNT_INDEX = parseInt(process.env.ACCOUNT_INDEX || '0'); // 账号严格按0,1,2排序
+const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || '1'); // 每组包含的账号个数
 const START_ROUND = parseInt(process.env.START_ROUND || '1'); // 起始轮次（用于分段模式）
 
 const LOGIN_URL = 'https://www.back4app.com/login';
 const DELAY_BETWEEN_RUNS = 60 * 60 * 1000; // 1小时 = 3600000ms
-const INITIAL_DELAY = ACCOUNT_INDEX * 30 * 60 * 1000; // 首次延迟：账号索引 * 30分钟
 
 // 状态文件路径，按账号隔离
 const STATUS_FILE = `status_${ACCOUNT_INDEX}.json`;
@@ -94,18 +94,34 @@ async function retry(page, fn, name, maxRetries = 3) {
 (async function main() {
   console.log('==================================================');
   console.log('Back4app 自动重新部署');
-  console.log(`执行次数: ${T}, 账号索引: ${ACCOUNT_INDEX}, 起始轮次: ${START_ROUND}`);
+  console.log(`执行次数: ${T}, 账号索引: ${ACCOUNT_INDEX}, 每组个数: ${BATCH_SIZE}, 起始轮次: ${START_ROUND}`);
   console.log('==================================================');
 
   if (!ACC || !ACC_PWD) { console.log('❌ 未找到账号或密码'); process.exit(1); }
 
-  if (INITIAL_DELAY > 0) {
-    console.log(`⏳ 首次启动延迟 ${INITIAL_DELAY / 60000} 分钟...`);
-    await new Promise(r => setTimeout(r, INITIAL_DELAY));
-  }
-
   const status = loadStatus();
   let startRound = status.currentRound;
+
+  // 动态分组错峰延迟计算：
+  // 只有第一轮跑的时候才需要安排发车时间轴（非中途恢复）
+  if (startRound === 1) {
+    // 计算属于第几组 (0-based)
+    const batchIndex = Math.floor(ACCOUNT_INDEX / BATCH_SIZE);
+    // 计算在组内的位置 (0-based)
+    const positionInBatch = ACCOUNT_INDEX % BATCH_SIZE;
+
+    // 组间延迟：每组错开 30 分钟
+    // 组内延迟：模拟“紧挨着依次执行”，Playwright 跑完一个号大约需要 1.5 到 2 分钟，我们错开 2 分钟即可完美衔接
+    let initialDelay = (batchIndex * 30 * 60 * 1000) + (positionInBatch * 2 * 60 * 1000);
+    
+    if (initialDelay > 0) {
+      console.log(`⏳ 分组排队：本账号属于第 ${batchIndex + 1} 组，组内排第 ${positionInBatch + 1} 位。`);
+      console.log(`⏳ 发车时间轴规划：将在 ${initialDelay / 60000} 分钟后正式启动...`);
+      await new Promise(r => setTimeout(r, initialDelay));
+    } else {
+      console.log(`⏳ 分组排队：首发账号，立刻发车！`);
+    }
+  }
 
   for (let round = startRound; round <= T; round++) {
     const elapsedTime = Date.now() - START_TIME;
