@@ -2,17 +2,31 @@ name: Back4app Auto Redeploy (Node.js Matrix)
 
 on:
   schedule:
-    - cron: '0 22 * * *' # 06:00 AM Beijing (UTC+8)
+    - cron: '0 22 * * *' 
   workflow_dispatch:
+    inputs:
+      T:
+        description: '执行次数 (默认12)'
+        required: false
+        default: '12'
+      start_round:
+        description: '起始轮次 (用于分段恢复)'
+        required: false
+        default: '1'
 
 permissions:
   contents: write
+
+env:
+  T: ${{ github.event.inputs.T || '12' }}
+  START_ROUND: ${{ github.event.inputs.start_round || '1' }}
 
 jobs:
   setup:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
+      total_rounds: ${{ steps.set-matrix.outputs.total_rounds }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -22,6 +36,8 @@ jobs:
         shell: bash
         env:
           ALL_SECRETS: ${{ toJson(secrets) }}
+          T: ${{ env.T }}
+          MAX_HOURS: 6
         run: |
           ACCOUNTS=$(echo "$ALL_SECRETS" | jq -r 'keys[] | select(startswith("EML_"))' | sed 's/EML_//' | shuf)
           if [ -z "$ACCOUNTS" ]; then
@@ -36,10 +52,18 @@ jobs:
             INDEX_ARRAY=$(echo "$ACCOUNTS" | jq -R . | jq -s -c .)
             echo "matrix=$INDEX_ARRAY" >> $GITHUB_OUTPUT
           fi
+          
+          TOTAL_ACCOUNTS=$(echo "$matrix" | jq 'length')
+          ROUNDS_PER_ACCOUNT=$T
+          
+          ESTIMATED_HOURS=$(echo "scale=2; $TOTAL_ACCOUNTS * $ROUNDS_PER_ACCOUNT * 1.2 / 60" | bc)
+          echo "估算运行时长: ${ESTIMATED_HOURS} 小时 (T=$T, 账号数=$TOTAL_ACCOUNTS)"
+          echo "total_rounds=$T" >> $GITHUB_OUTPUT
 
   renew:
     needs: setup
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -62,7 +86,17 @@ jobs:
           npm install
           npx playwright install --with-deps chrome
           sudo apt-get update
-          sudo apt-get install -y jq fonts-noto-cjk python3 wget
+          sudo apt-get install -y jq fonts-noto-cjk python3 wget bc
+
+      - name: Calculate account index
+        id: calc-index
+        shell: bash
+        run: |
+          if [ "${{ matrix.account_index }}" == "SINGLE" ]; then
+            echo "idx=0" >> $GITHUB_OUTPUT
+          else
+            echo "idx=${{ matrix.account_index }}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Start Proxy Tunnel
         env:
@@ -70,27 +104,23 @@ jobs:
         run: |
           if [ -z "$PROXY_URL" ]; then exit 0; fi
           
-          # 下载特定版本的 sing-box (与 ICMP9 项目一致)
           SINGBOX_VER="1.11.0"
-          echo "📦 下载 sing-box v${SINGBOX_VER}..."
+          echo "下载 sing-box v${SINGBOX_VER}..."
           wget -q "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VER}/sing-box-${SINGBOX_VER}-linux-amd64.tar.gz"
           tar -xzf "sing-box-${SINGBOX_VER}-linux-amd64.tar.gz"
           mv "sing-box-${SINGBOX_VER}-linux-amd64/sing-box" ./sing-box
           chmod +x ./sing-box
           
-          # 生成配置
-          echo "🔗 解析代理协议..."
+          echo "解析代理协议..."
           python3 proxy_handler.py
           
           if [ -f config.json ]; then
-            echo "✅ 代理配置已生成:"
-            cat config.json
-            # 使用 nohup 启动 (与 ICMP9 项目一致)
+            echo "代理配置已生成"
             nohup ./sing-box run -c config.json > singbox.log 2>&1 &
             sleep 5
-            echo "✅ Proxy tunnel started"
+            echo "Proxy tunnel started"
           else
-            echo "❌ 代理配置生成失败"
+            echo "代理配置生成失败"
             exit 1
           fi
 
@@ -101,25 +131,51 @@ jobs:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_ID: ${{ secrets.TG_ID }}
           PROXY_URL: ${{ secrets.PROXY_URL }}
+          APP_NAME: ${{ matrix.account_index == 'SINGLE' && secrets.APP_NAME || secrets[format('APP_NAME_{0}', matrix.account_index)] }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
+          T: ${{ env.T }}
+          ACCOUNT_INDEX: ${{ steps.calc-index.outputs.idx }}
+          START_ROUND: ${{ env.START_ROUND }}
         run: node renew.js
 
-      - name: Upload Screenshots
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: screenshots-${{ matrix.account_index }}
-          path: "*.png"
-          retention-days: 5
-
-      - name: Persist status.json
+      - name: Persist status_${{ steps.calc-index.outputs.idx }}.json
         if: always()
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git pull --rebase origin main || echo "No remote changes"
-          if [ -f status.json ]; then
-            git add status.json
-            git commit -m "chore: Update status.json for ${{ matrix.account_index }} [skip ci]" || echo "No changes"
+          STATUS_FILE="status_${{ steps.calc-index.outputs.idx }}.json"
+          if [ -f "$STATUS_FILE" ]; then
+            git add "$STATUS_FILE"
+            git commit -m "chore: Update $STATUS_FILE for ${{ matrix.account_index }} [skip ci]" || echo "No changes"
             git push
           fi
+
+      - name: Check if need next wave
+        id: check-next
+        if: always()
+        shell: bash
+        env:
+          T: ${{ env.T }}
+        run: |
+          STATUS_FILE="status_${{ steps.calc-index.outputs.idx }}.json"
+          if [ -f "$STATUS_FILE" ]; then
+            CURRENT=$(jq -r '.currentRound // 1' "$STATUS_FILE")
+            if [ "$CURRENT" -le "$T" ]; then
+              echo "NEXT_WAVE=true" >> $GITHUB_OUTPUT
+              echo "剩余轮次检测到，当前进度: $CURRENT / $T"
+            else
+              echo "NEXT_WAVE=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "NEXT_WAVE=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Trigger next wave
+        if: always() && steps.check-next.outputs.NEXT_WAVE == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sleep 60
+          echo "Triggering workflow again for remaining rounds..."
+          gh workflow run renew.yml -f T="${{ env.T }}"
