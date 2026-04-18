@@ -218,17 +218,25 @@ async function runRenewLogic(page) {
   await page.screenshot({ path: 'step4_app_detail.png' });
   addToSummary('Step 4: 应用详情页', 'step4_app_detail.png');
 
-  console.log('🚀 点击 "Redeploy App"');
-  await retry(page, async () => {
-    const redeployBtn = page.locator('button:has-text("Redeploy App"), a:has-text("Redeploy App")').filter({ visible: true }).first();
-    await redeployBtn.waitFor({ state: 'visible', timeout: 30000 });
-    await redeployBtn.click();
-  }, '点击 Redeploy App');
+    console.log('🚀 点击 "Redeploy App"');
+    await retry(page, async () => {
+      const redeployBtn = page.locator('button:has-text("Redeploy App"), a:has-text("Redeploy App")').filter({ visible: true }).first();
+      await redeployBtn.waitFor({ state: 'visible', timeout: 30000 });
+      await redeployBtn.click();
+    }, '点击 Redeploy App');
 
-  console.log('⏳ 等待部署开始...');
-  await page.waitForTimeout(3000); 
-  await page.screenshot({ path: 'step5_redeploying.png' });
-  addToSummary('Step 5: 开始重新部署', 'step5_redeploying.png');
+    console.log('⏳ 智能等待状态变更为 Deploying...');
+    try {
+      // 动态等待页面上出现 Deploying 文本，最长等 30 秒
+      await page.waitForSelector('text="Deploying"', { state: 'visible', timeout: 30000 });
+      console.log('✅ 成功检测到 Deploying 状态！');
+    } catch (error) {
+      console.log('⚠️ 未能在 30 秒内检测到 Deploying 状态，可能部署极快已变为 Running，或页面结构有变，继续执行...');
+    }
+    
+    // 无论是否捕捉到 Deploying，都截个图留档
+    await page.screenshot({ path: 'step5_redeploying.png' });
+    addToSummary('Step 5: 部署状态确认', 'step5_redeploying.png');
 
   console.log('✅ 部署操作完成');
 }
