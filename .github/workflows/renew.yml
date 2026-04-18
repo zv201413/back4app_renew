@@ -82,7 +82,7 @@ jobs:
             done
             if [ $batch -gt 0 ]; then MATRIX_JSON+=","; fi
             MATRIX_JSON+="{\"batch\":$batch,\"accounts\":\"$batch_accounts\"}"
-            ((batch++))
+            batch=$((batch + 1))
           done
           MATRIX_JSON+="]"
           
