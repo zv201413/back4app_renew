@@ -10,13 +10,17 @@ on:
         required: false
         default: '12'
       start_round:
-        description: '起始轮次 (用于分段恢复)'
+        description: '起始轮次 (0=自动续接, 1=全新开始, >1=手动指定)'
         required: false
         default: '1'
-      max_parallel:
-        description: '同时运行的并发数 (默认1)'
+      batch_size:
+        description: '每组包含的账号数 (默认1)'
         required: false
         default: '1'
+      batch_delay:
+        description: '批次间隔分钟数 (默认30)'
+        required: false
+        default: '30'
 
 permissions:
   contents: write
@@ -24,7 +28,8 @@ permissions:
 env:
   T: ${{ github.event.inputs.T || '12' }}
   START_ROUND: ${{ github.event.inputs.start_round || '1' }}
-  MAX_PARALLEL: ${{ github.event.inputs.max_parallel || '1' }}
+  BATCH_SIZE: ${{ github.event.inputs.batch_size || '1' }}
+  BATCH_DELAY: ${{ github.event.inputs.batch_delay || '30' }}
 
 jobs:
   setup:
@@ -32,43 +37,60 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
       total_rounds: ${{ steps.set-matrix.outputs.total_rounds }}
-      max_parallel: ${{ steps.set-matrix.outputs.max_parallel }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Generate account list
+      - name: Generate batch matrix
         id: set-matrix
         shell: bash
         env:
           ALL_SECRETS: ${{ toJson(secrets) }}
           T: ${{ env.T }}
-          MAX_HOURS: 6
+          BATCH_SIZE: ${{ env.BATCH_SIZE }}
         run: |
-          # 提取 EML 后缀并按数字大小排正序
+          # 提取 EML 后缀并按数字排序
           ACCOUNTS=$(echo "$ALL_SECRETS" | jq -r 'keys[] | select(startswith("EML_")) | sub("EML_";"")' | sort -n)
+          
           if [ -z "$ACCOUNTS" ]; then
             HAS_SINGLE=$(echo "$ALL_SECRETS" | jq -r 'keys[] | select(. == "EML")')
             if [ -n "$HAS_SINGLE" ]; then
-              echo "matrix=[{\"acc\":\"SINGLE\", \"idx\":0}]" >> $GITHUB_OUTPUT
+              echo 'matrix=[{"batch":0,"accounts":"SINGLE"}]' >> $GITHUB_OUTPUT
+              echo "total_rounds=$T" >> $GITHUB_OUTPUT
+              echo "单账号模式 → 1 个批次"
+              exit 0
             else
               echo "Error: No EML_1 or EML secrets found."
               exit 1
             fi
-          else
-            # 将账号映射为严格按 0,1,2,3 递增的 JSON 数组
-            MATRIX_JSON=$(echo "$ACCOUNTS" | awk '{print "{\"acc\":\""$1"\", \"idx\":"NR-1"}"}' | jq -s -c '.')
-            echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
           fi
           
-          echo "max_parallel=${{ env.MAX_PARALLEL }}" >> $GITHUB_OUTPUT
+          # 将账号列表转为数组
+          ACCOUNT_ARRAY=($(echo "$ACCOUNTS"))
+          TOTAL=${#ACCOUNT_ARRAY[@]}
+          echo "发现 $TOTAL 个账号，BATCH_SIZE=$BATCH_SIZE"
           
-          TOTAL_ACCOUNTS=$(echo "$matrix" | jq 'length')
-          ROUNDS_PER_ACCOUNT=$T
+          # 按 BATCH_SIZE 分组，生成批次级 matrix
+          # 例如 BATCH_SIZE=3, 账号=[1,2,3,4,5] → [{batch:0,accounts:"1,2,3"}, {batch:1,accounts:"4,5"}]
+          MATRIX_JSON="["
+          batch=0
+          for ((i=0; i<TOTAL; i+=BATCH_SIZE)); do
+            batch_accounts=""
+            for ((j=i; j<i+BATCH_SIZE && j<TOTAL; j++)); do
+              if [ -n "$batch_accounts" ]; then batch_accounts+=","; fi
+              batch_accounts+="${ACCOUNT_ARRAY[$j]}"
+            done
+            if [ $batch -gt 0 ]; then MATRIX_JSON+=","; fi
+            MATRIX_JSON+="{\"batch\":$batch,\"accounts\":\"$batch_accounts\"}"
+            ((batch++))
+          done
+          MATRIX_JSON+="]"
           
-          ESTIMATED_HOURS=$(echo "scale=2; $TOTAL_ACCOUNTS * $ROUNDS_PER_ACCOUNT * 1.2 / 60" | bc)
-          echo "估算运行时长: ${ESTIMATED_HOURS} 小时 (T=$T, 账号数=$TOTAL_ACCOUNTS)"
+          echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
           echo "total_rounds=$T" >> $GITHUB_OUTPUT
+          
+          echo "分组结果: $TOTAL 个账号 → $batch 个批次"
+          echo "Matrix: $MATRIX_JSON"
 
   renew:
     needs: setup
@@ -76,7 +98,6 @@ jobs:
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      max-parallel: ${{ fromJson(needs.setup.outputs.max_parallel) }}
       matrix:
         include: ${{ fromJson(needs.setup.outputs.matrix) }}
 
@@ -126,37 +147,35 @@ jobs:
 
       - name: Run Extension Script
         env:
-          ACC: ${{ matrix.acc == 'SINGLE' && secrets.EML || secrets[format('EML_{0}', matrix.acc)] }}
-          ACC_PWD: ${{ matrix.acc == 'SINGLE' && secrets.PWD || secrets[format('PWD_{0}', matrix.acc)] }}
+          ALL_SECRETS: ${{ toJson(secrets) }}
+          ACCOUNTS: ${{ matrix.accounts }}
+          BATCH_INDEX: ${{ matrix.batch }}
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_ID: ${{ secrets.TG_ID }}
           PROXY_URL: ${{ secrets.PROXY_URL }}
-          APP_NAME: ${{ matrix.acc == 'SINGLE' && secrets.APP_NAME || secrets[format('APP_NAME_{0}', matrix.acc)] }}
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
           T: ${{ env.T }}
-          ACCOUNT_INDEX: ${{ matrix.idx }}
-          MAX_PARALLEL: ${{ needs.setup.outputs.max_parallel }}
           START_ROUND: ${{ env.START_ROUND }}
+          BATCH_DELAY: ${{ env.BATCH_DELAY }}
         run: node renew.js
 
       - name: Upload Screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: screenshots-${{ matrix.acc }}
+          name: screenshots-batch-${{ matrix.batch }}
           path: "*.png"
           retention-days: 5
 
-      - name: Persist status_${{ matrix.idx }}.json
+      - name: Persist status file
         if: always()
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git pull --rebase origin main || echo "No remote changes"
-          STATUS_FILE="status_${{ matrix.idx }}.json"
+          STATUS_FILE="status_batch_${{ matrix.batch }}.json"
           if [ -f "$STATUS_FILE" ]; then
             git add "$STATUS_FILE"
-            git commit -m "chore: Update $STATUS_FILE for account ${{ matrix.acc }} [skip ci]" || echo "No changes"
+            git commit -m "chore: Update $STATUS_FILE for batch ${{ matrix.batch }} [skip ci]" || echo "No changes"
             git push
           fi
 
@@ -167,12 +186,12 @@ jobs:
         env:
           T: ${{ env.T }}
         run: |
-          STATUS_FILE="status_${{ matrix.idx }}.json"
+          STATUS_FILE="status_batch_${{ matrix.batch }}.json"
           if [ -f "$STATUS_FILE" ]; then
             CURRENT=$(jq -r '.currentRound // 1' "$STATUS_FILE")
             if [ "$CURRENT" -le "$T" ]; then
               echo "NEXT_WAVE=true" >> $GITHUB_OUTPUT
-              echo "剩余轮次检测到，当前进度: $CURRENT / $T"
+              echo "剩余轮次: $CURRENT / $T"
             else
               echo "NEXT_WAVE=false" >> $GITHUB_OUTPUT
             fi
@@ -181,10 +200,10 @@ jobs:
           fi
 
       - name: Trigger next wave
-        if: always() && steps.check-next.outputs.NEXT_WAVE == 'true'
+        if: always() && steps.check-next.outputs.NEXT_WAVE == 'true' && matrix.batch == 0
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           sleep 60
           echo "Triggering workflow again for remaining rounds..."
-          gh workflow run renew.yml -f T="${{ env.T }}" -f max_parallel="${{ env.MAX_PARALLEL }}"
+          gh workflow run renew.yml -f T="${{ env.T }}" -f batch_size="${{ env.BATCH_SIZE }}" -f batch_delay="${{ env.BATCH_DELAY }}" -f start_round="0"
