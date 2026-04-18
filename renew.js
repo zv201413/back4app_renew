@@ -226,20 +226,31 @@ async function runRenewLogic(page) {
   await page.screenshot({ path: 'step4_app_detail.png' });
   addToSummary('Step 4: 应用详情页', 'step4_app_detail.png');
 
-  console.log('🔍 检查当前是否已经在部署中...');
-  const isDeploying = await page.locator('text="Deploying"').filter({ visible: true }).count() > 0;
+  console.log('🔍 检查当前实例状态...');
   
-  if (isDeploying) {
-    console.log('✅ 检测到当前应用已经是 Deploying 状态，跳过点击按钮。');
+  // 尝试短时间内寻找 Redeploy 按钮（最多等 5 秒）
+  // 这里的逻辑是：如果实例需要重启，按钮肯定很快就在页面上。如果不在，说明它是活的。
+  const redeployBtn = page.locator('button:has-text("Redeploy App"), a:has-text("Redeploy App")').filter({ visible: true }).first();
+  
+  let needsRedeploy = false;
+  try {
+    await redeployBtn.waitFor({ state: 'visible', timeout: 5000 });
+    needsRedeploy = true; // 按钮出现了，说明需要抢救
+  } catch (error) {
+    // 5秒内没找到按钮
+    needsRedeploy = false;
+  }
+  
+  if (!needsRedeploy) {
+    console.log('✅ 检测到当前应用处于活跃状态 (Available/Deploying 等)，无需重新部署，跳过点击。');
     await page.screenshot({ path: 'step5_redeploying.png' });
-    addToSummary('Step 5: 部署状态确认 (已在部署中)', 'step5_redeploying.png');
-    return; // 提前结束本轮核心逻辑，视为成功
+    addToSummary('Step 5: 部署状态确认 (已活跃)', 'step5_redeploying.png');
+    return; // 提前结束本轮，视为成功
   }
 
-  console.log('🚀 点击 "Redeploy App"');
+  console.log('🚀 实例需要唤醒，正在点击 "Redeploy App"...');
   await retry(page, async () => {
-    const redeployBtn = page.locator('button:has-text("Redeploy App"), a:has-text("Redeploy App")').filter({ visible: true }).first();
-    await redeployBtn.waitFor({ state: 'visible', timeout: 30000 });
+    // 因为前面已经 waitFor 确保它出现了，这里直接点
     await redeployBtn.click();
   }, '点击 Redeploy App');
 
